@@ -1,16 +1,16 @@
 # SQL_Portfolio
 
 What it is:
-  Synthetic P&C insurance dataset, self-built to practice CTEs/window functions. Practice is split up into these modules:
+  Synthetic P&C insurance dataset, self-built to practice CTEs/window functions and real world case studies. Dataset is included in sql_practice_seed_data.sql.Practice is split up into these modules:
 
-Module 1 — Multi-CTE Fluency
-Module 2 — Window Function Fundamentals
-Module 3 — Ranking Functions
-Module 4 — LAG / LEAD
-Module 5 — Running Totals & Frames
-Module 6 — Combining CTEs + Windows
-Module 7 — Query Optimization Basics
-Module 8 — Capstone
+  - Module 1 — Multi-CTE Fluency
+  - Module 2 — Window Function Fundamentals
+  - Module 3 — Ranking Functions
+  - Module 4 — LAG / LEAD
+  - Module 5 — Running Totals & Frames
+  - Module 6 — Combining CTEs + Windows
+  - Module 7 — Query Optimization Basics
+  - Module 8 — Capstone
 
 
 Schema w/ column names:
