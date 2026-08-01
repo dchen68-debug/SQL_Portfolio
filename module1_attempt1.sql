@@ -1,0 +1,314 @@
+/* Module 1 - Exercise 1
+Write a 4-CTE query that produces, per line of business: total earned premium, total incurred losses, total paid losses, and a simple loss ratio (paid / earned).
+
+--- Attempt 1
+WITH agg_c_pymt AS (                             --- beginning of Multi-CTE
+    SELECT                                                                             
+        cp.claim_id, 
+        SUM(payment_amount) AS sum_pymt
+    FROM claim_payments cp                        --- good practice to alias tables 
+    GROUP BY cp.claim_id    
+),                                                                                        --- (a) aggregate claim_payments by claim
+c_data AS (                                        --- CTE chain 
+    SELECT 
+        c.claim_status,                         --- good practice to list column names 
+        c.claim_id, 
+        c.policy_id, 
+        c.report_date, 
+        c.loss_date, 
+        sum_pymt
+    FROM claims c 
+    JOIN agg_c_pymt a
+    ON a.claim_id = c.claim_id
+),                                                                                        --- (b) join to claims to get status/dates
+all_data AS (
+    SELECT
+        p.policy_id,
+        p.line_of_business,
+        cd.claim_id,
+        sum_pymt,
+        cd.claim_status, 
+        cd.report_date, 
+        cd.loss_date 
+    FROM policies p 
+    JOIN c_data cd 
+    ON p.policy_id = cd.policy_id
+)                                                                                        --- (c) join to policies to add line of business
+SELECT  
+    ad.line_of_business,
+    SUM(sum_pymt) AS total_paid 
+FROM all_data ad
+GROUP BY ad.line_of_business                                                            --- final SELECT reports total paid by LOB 
+--- Module 1 - Exercise 3
+WITH RECURSIVE date_spine AS (
+    SELECT DATE '2023-01-01' AS month                                                    --- anchor: starting point
+    UNION ALL
+    SELECT (month + INTERVAL '1 month')::date                                            --- recurisve step: add a month
+    FROM date_spine
+    WHERE month < DATE '2024-12-01'                                                        --- stop condition
+)
+SELECT 
+    ds.month,
+    mp.earned_premium
+FROM date_spine ds
+LEFT JOIN monthly_premiums mp
+    ON mp.month = ds.month 
+ORDER BY ds.month;
+
+--- Module 1 Checkpoint
+WITH mp_prem AS (                                     --- CTE for total earned premium
+    SELECT 
+        mp.policy_id, 
+        SUM(earned_premium) AS total_earned_prem
+    FROM monthly_premiums mp
+    GROUP BY mp.policy_id
+),
+new_claims AS (                                     --- CTE for total incurred losses
+    SELECT
+        mpp.policy_id,
+        c.claim_id, 
+        SUM(c.incurred_amount) AS total_incurred,
+        total_earned_prem 
+    FROM claims c
+    JOIN mp_prem mpp
+    ON c.policy_id = mpp.policy_id
+    GROUP BY c.claim_id, mpp.policy_id, total_earned_prem
+),
+total_paid AS (                                        --- CTE for total paid losses
+    SELECT
+        nc.policy_id,
+        nc.claim_id,
+        SUM(payment_amount) AS total_paid_losses,
+        total_incurred,
+        total_earned_prem
+    FROM claim_payments cp 
+    JOIN new_claims nc 
+    ON cp.claim_id = nc.claim_id
+    WHERE (payment_type = 'Indemnity')
+    GROUP BY nc.claim_id, nc.policy_id, total_incurred, total_earned_prem
+),
+loss_ratios AS (                                     --- CTE for loss ratio (incurred loss ratio)
+    SELECT 
+        tp.claim_id,
+        total_incurred / total_earned_prem AS incurred_loss_ratio,
+        total_incurred,
+        total_earned_prem,
+        total_paid_losses,
+        tp.policy_id
+    FROM total_paid tp
+),
+final_cte    AS (
+    SELECT
+        total_earned_prem,
+        total_incurred,
+        total_paid_losses,
+        incurred_loss_ratio,
+        lr.claim_id,
+        p.line_of_business,
+        lr.policy_id         
+    FROM policies p
+    JOIN loss_ratios lr
+    ON p.policy_id = lr.policy_id
+)
+SELECT * FROM final_cte fc
+GROUP BY fc.line_of_business, fc.total_earned_prem, fc.total_incurred, fc.total_paid_losses, fc.incurred_loss_ratio, fc.claim_id, fc.policy_id
+
+
+
+ --- Result: Query failed,
+            --- Feedback: 
+            ---1. The final GROUP BY doesn't aggregate anything - No SUM() in the final SELECT
+            ---2. The premium double-counting is still there, just no longer erroring — which is worse, not better. - should be grouped by policy instead of claim
+            ---3. LEFT JOIN + COALESCE instead of JOIN - policies w/ 0 claims or payments would vanish 
+            ---4. NULLIF( x, 0) - protects loss ratio guards against divison by 0 
+
+--- Attempt 2 7/31/26
+
+WITH earned_prem AS ( 									--- CTE for earned_prem			
+	SELECT 
+		mp.policy_id,
+		SUM(mp.earned_premium) AS total_earned_prem
+	FROM monthly_premiums mp
+	GROUP BY mp.policy_id
+),
+incurred_losses AS (									--- CTE for incurred_losses
+	SELECT
+		ep.policy_id,
+		c.claim_id,
+		SUM(c.incurred_amount) AS total_incurred_losses
+	FROM claims c
+	LEFT JOIN earned_prem ep
+	ON c.policy_id = ep.policy_id
+	GROUP BY ep.policy_id, c.claim_id
+),
+paid_losses AS (										--- CTE for paid_losses
+	SELECT 
+		il.policy_id,
+		SUM(cp.payment_amount) AS total_paid_losses
+	FROM claim_payments cp
+	LEFT JOIN incurred_losses il
+	ON cp.claim_id = il.claim_id
+	WHERE cp.payment_type = 'Indemnity' 				--- defined by payment_type = Indemnity
+	GROUP BY il.policy_id
+),
+policy_summary AS (										--- final CTE compiling aggregations 
+	SELECT
+		p.line_of_business,
+		SUM(total_earned_prem) AS total_earned_prem,
+		SUM(total_incurred_losses) AS total_incurred_losses,
+		SUM(total_paid_losses) AS total_paid_losses,
+		SUM(total_incurred_losses / total_earned_prem) AS total_loss_ratio
+	FROM policies p
+	LEFT JOIN earned_prem ep ON ep.policy_id = p.policy_id
+	LEFT JOIN incurred_losses il ON il.policy_id = p.policy_id
+	LEFT JOIN paid_losses pl ON p.policy_id = p.policy_id
+	GROUP BY p.line_of_business
+)
+SELECT * FROM policy_summary 
+
+
+
+	RESULT: FAILED
+	FEEDBACK:
+			1. incurred_losses never actually collapsed to policy grain.
+						GROUP BY ep.policy_id, c.claim_id
+						You're still grouping by claim_id here, so this CTE returns one row per claim, not per policy
+			
+			2. A real bug, not a style issue — the paid_losses join condition:
+						LEFT JOIN paid_losses pl ON p.policy_id = p.policy_id
+						it's comparing p.policy_id to itself, not to pl.policy_id
+						
+			3. These two bugs compound each other.
+						Because incurred_losses fans out to one row per claim, and paid_losses then cross-joins on top of that, policy_summary ends up with a wildly inflated number of rows per policy
+			
+			4. The loss ratio formula itself is mathematically wrong, independent of the fan-out issue:
+							SUM(total_incurred_losses / total_earned_prem)
+							SUM(total_incurred_losses) / SUM(total_earned_prem)
+
+			5. Missing NULLIF protection
+
+
+--- Attempt 2.1
+WITH earned_prem AS (                                     --- CTE for earned_prem            
+    SELECT 
+        mp.policy_id,
+        SUM(mp.earned_premium) AS total_earned_prem
+    FROM monthly_premiums mp
+    GROUP BY mp.policy_id
+),
+incurred_losses AS (                                    --- CTE for incurred_losses
+    SELECT
+        ep.policy_id,        
+        SUM(c.incurred_amount) AS total_incurred_losses  
+    FROM claims c
+    LEFT JOIN earned_prem ep
+    ON c.policy_id = ep.policy_id
+    GROUP BY ep.policy_id                                
+),
+paid_losses AS (                                        --- CTE for paid_losses
+    SELECT 
+        c.policy_id,
+        SUM(cp.payment_amount) AS total_paid_losses
+    FROM claim_payments cp
+    JOIN claims c
+    ON cp.claim_id = c.claim_id
+    WHERE cp.payment_type = 'Indemnity'                 --- defined by payment_type = Indemnity
+    GROUP BY c.policy_id
+),
+policy_summary AS (                                        --- final CTE compiling aggregations 
+    SELECT
+        p.line_of_business,
+        SUM(total_earned_prem) AS total_earned_prem,
+        SUM(total_incurred_losses) AS total_incurred_losses,
+        SUM(total_paid_losses) AS total_paid_losses,
+        SUM(total_incurred_losses) / SUM(total_earned_prem) AS total_loss_ratio
+    FROM policies p
+    LEFT JOIN earned_prem ep ON ep.policy_id = p.policy_id
+    LEFT JOIN incurred_losses il ON il.policy_id = p.policy_id
+    LEFT JOIN paid_losses pl ON pl.policy_id = p.policy_id
+    GROUP BY p.line_of_business
+)
+SELECT * FROM policy_summary
+
+
+Result: Failed
+Feedback:
+	1) incurred_losses — it doesn't need earned_prem at all.
+	2) Still no NULLIF guard on the division.
+
+
+
+
+--- Attempt 2.2 8/1/26
+WITH earned_prem AS ( 									--- CTE for earned_prem			
+	SELECT 												--- aggregates earned prem grouped by policy_id
+		mp.policy_id,
+		SUM(mp.earned_premium) AS total_earned_prem
+	FROM monthly_premiums mp
+	GROUP BY mp.policy_id
+),
+incurred_losses AS (									--- CTE for incurred_losses
+	SELECT												--- aggregates incurred_amount by policy_id		
+		c.policy_id,									--- removed earned_prem JOIN
+		SUM(c.incurred_amount) AS total_incurred_losses  
+	FROM claims c
+	GROUP BY c.policy_id								
+),
+paid_losses AS (										--- CTE for paid_losses
+	SELECT 												--- Joins on claim_id to obtain c.policy_id to fulfill policy grain level (all aggregations on policy level)
+		c.policy_id,
+		SUM(cp.payment_amount) AS total_paid_losses
+	FROM claim_payments cp
+	JOIN claims c
+	ON cp.claim_id = c.claim_id
+	WHERE cp.payment_type = 'Indemnity' 				--- defined by payment_type = Indemnity
+	GROUP BY c.policy_id
+),
+policy_summary AS (										--- final CTE compiling aggregations 
+	SELECT
+		p.line_of_business,
+		SUM(total_earned_prem) AS total_earned_prem,
+		SUM(total_incurred_losses) AS total_incurred_losses,
+		SUM(total_paid_losses) AS total_paid_losses,
+		SUM(total_incurred_losses) / NULLIF(SUM(total_earned_prem),0) AS total_loss_ratio 		--- NULLIF protects against division of 0 earned premium
+	FROM policies p
+	LEFT JOIN earned_prem ep ON ep.policy_id = p.policy_id		
+	LEFT JOIN incurred_losses il ON il.policy_id = p.policy_id
+	LEFT JOIN paid_losses pl ON pl.policy_id = p.policy_id
+	GROUP BY p.line_of_business																	--- SUM() functions in SELECT statement allows our GROUP BY to remain on LOB level
+)
+SELECT * FROM policy_summary 
+
+
+Results: Passed
+Criticism:
+1. LEFT JOIN on earned_prem and incurred_losses is arguably wrong, not just cautious.
+You're doing LEFT JOIN earned_prem and LEFT JOIN incurred_losses from policies — meaning a policy with no premium data or no claims still shows up, with NULL fed into SUM(), which Postgres silently treats as 0. Is that actually what you want? A policy with zero claims contributing a $0 incurred loss to its line of business's total is defensible. But ask yourself: should a policy that hasn't started earning premium yet (brand new, mid-cycle) be silently counted as $0 earned premium in your denominator, dragging down every loss ratio in its LOB? In a real regulatory report, that's the difference between "policy excluded, pending data" and "policy included, materially distorting the ratio." You made a join-type decision with real analytical consequences and didn't document why you chose LEFT over INNER. In a code review, I'd block this until you can answer that question in one sentence in a comment.
+
+2. Silent zero-division risk still exists, one level up.
+You guarded the final loss ratio with NULLIF. You did not guard paid_losses or incurred_losses against a scenario where SUM() returns NULL because a policy matched zero rows across every join. Right now it happens to resolve to 0 because SUM(NULL) over an empty group returns NULL, and SUM(NULL, NULL, ...) in the outer aggregate skips nulls — you got lucky that Postgres's null-handling bailed you out here, not because you designed for it. Would you be able to explain, right now, without testing it, what happens to a line of business where every single policy has zero claims? Walk through it. If you can't answer confidently, that's a gap.
+
+3. No comment explaining the loss ratio formula choice.
+SUM(total_incurred_losses) / SUM(total_earned_prem) — you know this is "ratio of sums" not "sum of ratios," and you know why it matters (weighting by dollar volume). Nobody else reading this file six months from now knows that unless you write it down. A one-line comment — -- ratio of sums (not average of per-policy ratios) to correctly weight by premium volume — costs you ten seconds and saves the next person (possibly future-you) from "fixing" it into the wrong formula because the right version looks less obviously correct at a glance.
+
+4. Column naming collision waiting to happen.
+total_earned_prem, total_incurred_losses, total_paid_losses are named identically in their source CTE and in policy_summary's output. Right now that's fine because context disambiguates it. But it means if anyone (including you, in Module 2) tries to build on top of this by adding a fourth CTE that also needs total_earned_prem from before it was summed to LOB grain, they'll have a naming collision or, worse, silently reference the wrong grain's version of a same-named column. Not wrong today. Will bite someone in six weeks.
+
+5. No test for orphaned data.
+Does every claim_id in claims have a valid policy_id that actually exists in policies? Does every claim_id in claim_payments exist in claims? You've been assuming referential integrity holds because your foreign keys enforce it in this practice schema — real production data, especially regulatory data pulled from multiple upstream systems, will absolutely violate this, and your JOINs will silently drop orphaned rows rather than erroring. You have zero validation queries anywhere in this file confirming row counts in equal row counts out at each stage. That's the single habit I'd push hardest on you to build next, because it's the exact thing that catches a data-quality problem before it reaches a regulatory filing.
+
+6. WHERE cp.payment_type = 'Indemnity' — hardcoded string, no defensive check.
+What happens if someone upstream changes this to 'indemnity' lowercase, or 'Indemnity Payment', or introduces a new type you haven't anticipated? Your query will silently under-count paid losses with zero error, zero warning. In real regulatory data pipelines, this is exactly the kind of silent drift that causes restated filings. A SELECT DISTINCT payment_type FROM claim_payments as a standing sanity check, run before you trust any output, would catch this in five seconds. You didn't run it. Should have.
+
+Key Takeaways:
+	1) Can JOIN multiple tables in a row
+	2) If dividing by a column, add NULLIF() to protect against division of 0
+	3) Make sure GROUP BY is very specific - one column referenced across multiple CTEs keeps it grain level (ie: policy_id)
+	4) Be very particular about what columns you reference in your CTEs - too many can make GROUP BY difficult and overall makes things much less organized
+	5) Double check areas of code which can lead to inaccurate results BUT WILL STILL RUN INSTEAD OF ERROR- p.policy_id = p.policy_id will run with an error,
+	6) Make sure to comment out any logic or judgement made for future users 
+	
+Overall, the query is correct but is not production grade. It needs more defensive thinking to protect malfunctions when the data is not clean.
+*/
+
+
