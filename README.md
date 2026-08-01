@@ -1,9 +1,19 @@
 # SQL_Portfolio
 
 What it is:
-  Synthetic P&C insurance dataset, self-built to practice CTEs/window functions for a Risk Analyst transition. 
+  Synthetic P&C insurance dataset, self-built to practice CTEs/window functions. Practice is split up into these modules:
 
-Schema:
+Module 1 — Multi-CTE Fluency
+Module 2 — Window Function Fundamentals
+Module 3 — Ranking Functions
+Module 4 — LAG / LEAD
+Module 5 — Running Totals & Frames
+Module 6 — Combining CTEs + Windows
+Module 7 — Query Optimization Basics
+Module 8 — Capstone
+
+
+Schema w/ column names:
   1) claims_payments
      - payment_id integer
      - claim_id integer
