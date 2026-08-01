@@ -1,7 +1,7 @@
 # SQL_Portfolio
 
 What it is:
-  Synthetic P&C insurance dataset, self-built to practice CTEs/window functions and real world case studies. Dataset is included in sql_practice_seed_data.sql.Practice is split up into these modules:
+  Synthetic P&C insurance dataset, self-built to practice CTEs/window functions and real world case studies. Dataset is included in sql_practice_seed_data.sql. Practice is split up into these modules:
 
   - Module 1 — Multi-CTE Fluency
   - Module 2 — Window Function Fundamentals
